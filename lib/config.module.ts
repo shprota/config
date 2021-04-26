@@ -1,4 +1,4 @@
-import { DynamicModule, Module } from '@nestjs/common';
+import { DynamicModule, Inject, Module, OnModuleDestroy } from '@nestjs/common';
 import { FactoryProvider } from '@nestjs/common/interfaces';
 import * as dotenv from 'dotenv';
 import dotenvExpand from 'dotenv-expand';
@@ -7,6 +7,7 @@ import { resolve } from 'path';
 import { isObject } from 'util';
 import { ConfigHostModule } from './config-host.module';
 import {
+  DYNAMIC_CONFIG_PATH,
   CONFIGURATION_LOADER,
   CONFIGURATION_SERVICE_TOKEN,
   CONFIGURATION_TOKEN,
@@ -19,6 +20,7 @@ import { ConfigFactoryKeyHost } from './utils';
 import { createConfigProvider } from './utils/create-config-factory.util';
 import { getRegistrationToken } from './utils/get-registration-token.util';
 import { mergeConfigObject } from './utils/merge-configs.util';
+import { FSWatcher, watch } from 'chokidar';
 
 @Module({
   imports: [ConfigHostModule],
@@ -30,7 +32,9 @@ import { mergeConfigObject } from './utils/merge-configs.util';
   ],
   exports: [ConfigHostModule, ConfigService],
 })
-export class ConfigModule {
+export class ConfigModule implements OnModuleDestroy {
+  watcher?: FSWatcher;
+
   /**
    * Loads process environment variables depending on the "ignoreEnvFile" flag and "envFilePath" value.
    * Also, registers custom configurations globally.
@@ -39,11 +43,12 @@ export class ConfigModule {
   static forRoot(options: ConfigModuleOptions = {}): DynamicModule {
     let validatedEnvConfig: Record<string, any> | undefined = undefined;
     let config = options.ignoreEnvFile ? {} : this.loadEnvFile(options);
-
+    const dynamicConfig = this.loadDynamicFile(options.dynamicConfigPath);
     if (!options.ignoreEnvVars) {
       config = {
         ...config,
         ...process.env,
+        ...dynamicConfig, // Dynamic has the highest priority
       };
     }
     if (options.validate) {
@@ -97,6 +102,11 @@ export class ConfigModule {
       providers.push(validatedEnvConfigLoader);
     }
 
+    providers.push({
+        provide: DYNAMIC_CONFIG_PATH,
+        useFactory: () => options.dynamicConfigPath,
+      });
+
     return {
       module: ConfigModule,
       global: options.isGlobal,
@@ -141,6 +151,10 @@ export class ConfigModule {
         configProvider,
         serviceProvider,
         {
+          provide: DYNAMIC_CONFIG_PATH,
+          useFactory: () => undefined,
+        },
+        {
           provide: CONFIGURATION_LOADER,
           useFactory: (
             host: Record<string, any>,
@@ -177,6 +191,32 @@ export class ConfigModule {
     return config;
   }
 
+  private static loadDynamicFile(
+    dynamicConfigPath?: string,
+  ) : Record<string, any> {
+    if (dynamicConfigPath && fs.existsSync(dynamicConfigPath)) {
+      const fileContent = fs.readFileSync(dynamicConfigPath, {
+        encoding: 'utf-8',
+      });
+      try {
+        const json = JSON.parse(fileContent);
+        const variables = json?.data || json;
+
+        if (variables) {
+/*
+          No validation for dynamic config. Developer responsibility.
+          if (options.validate) {
+            options.validate(variables);
+          }
+*/
+          return variables;
+        }
+
+      } catch(e) {}
+    }
+    return {};
+  }
+
   private static assignVariablesToProcess(config: Record<string, any>) {
     if (!isObject(config)) {
       return;
@@ -206,5 +246,32 @@ export class ConfigModule {
       abortEarly: false,
       allowUnknown: true,
     };
+  }
+
+  constructor(
+    @Inject(CONFIGURATION_TOKEN)
+    private readonly internalConfig: Record<string, any> = {},
+    @Inject(DYNAMIC_CONFIG_PATH)
+    private readonly dynamicConfigPath?: string,
+  ) {
+    if (dynamicConfigPath) {
+      this.watcher = watch(dynamicConfigPath, {
+        persistent: true,
+      });
+      this.watcher
+        .on('add', (path) => {
+          const newConfig = ConfigModule.loadDynamicFile(path);
+          Object.assign(this.internalConfig[VALIDATED_ENV_PROPNAME], newConfig);
+        })
+        .on('change', (path) => {
+          const newConfig = ConfigModule.loadDynamicFile(path);
+          Object.assign(this.internalConfig[VALIDATED_ENV_PROPNAME], newConfig);
+        });
+    }
+  }
+
+  onModuleDestroy(): void {
+    if (this.watcher)
+      return this.watcher.unwatch(this.dynamicConfigPath!);
   }
 }

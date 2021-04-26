@@ -131,6 +131,26 @@ export class AppModule {
     };
   }
 
+  static withDynamicConfig(
+    dynamicConfigPath: string,
+    envFilePath?: string,
+    ): DynamicModule {
+    return {
+      module: AppModule,
+      imports: [
+        ConfigModule.forRoot({
+          envFilePath,
+          dynamicConfigPath,
+          validationSchema: Joi.object({
+            PORT: Joi.number().required(),
+            DATABASE_NAME: Joi.string().required(),
+          }),
+        }),
+      ],
+    };
+
+  }
+
   getEnvVariables() {
     return process.env;
   }

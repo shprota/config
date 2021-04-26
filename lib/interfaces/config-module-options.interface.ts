@@ -66,4 +66,11 @@ export interface ConfigModuleOptions {
    * this property is set to true.
    */
   expandVariables?: boolean;
+
+  /**
+   * Path to a json file with dynamic config.
+   * The configuration values will be updated dynamically when the file
+   * content changes.
+   */
+  dynamicConfigPath?: string;
 }

@@ -17,6 +17,7 @@
     "release": "release-it"
   },
   "dependencies": {
+    "chokidar": "^3.5.1",
     "dotenv": "8.2.0",
     "dotenv-expand": "5.1.0",
     "lodash.get": "4.4.2",
